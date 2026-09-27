@@ -1,0 +1,161 @@
+---
+const title = "Cloudflare Test Server";
+---
+
+<!doctype html>
+<html lang="ko">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width" />
+    <meta name="description" content="Astro, Hono, Drizzle, Cloudflare D1 테스트 프로젝트" />
+    <title>{title}</title>
+  </head>
+  <body>
+    <main class="shell">
+      <header>
+        <p class="eyebrow">ASTRO · HONO · DRIZZLE · D1</p>
+        <h1>{title}</h1>
+        <p class="intro">화면은 Astro, API는 Hono, 데이터는 Drizzle과 Cloudflare D1로 연결되어 있습니다.</p>
+      </header>
+
+      <section class="panel" aria-labelledby="status-heading">
+        <div class="section-heading">
+          <div>
+            <p class="eyebrow">RUNTIME</p>
+            <h2 id="status-heading">서버 상태</h2>
+          </div>
+          <span id="status-badge" class="badge pending">확인 중</span>
+        </div>
+        <pre id="health-result" aria-live="polite">API에 연결하는 중…</pre>
+      </section>
+
+      <section class="panel" aria-labelledby="notes-heading">
+        <p class="eyebrow">D1 DATABASE</p>
+        <h2 id="notes-heading">테스트 메모</h2>
+        <form id="note-form">
+          <label for="note-content">메모 내용</label>
+          <div class="form-row">
+            <input id="note-content" name="content" maxlength="240" required placeholder="첫 번째 메모를 남겨보세요" />
+            <button type="submit">저장</button>
+          </div>
+          <p id="form-message" class="form-message" aria-live="polite"></p>
+        </form>
+        <ul id="note-list" class="note-list" aria-live="polite"></ul>
+      </section>
+      <footer>로컬 개발에서는 Wrangler가 D1을 로컬 에뮬레이트합니다.</footer>
+    </main>
+  </body>
+</html>
+
+<style>
+  :global(*) { box-sizing: border-box; }
+  :global(body) {
+    margin: 0;
+    min-height: 100vh;
+    background: #f3f5f8;
+    color: #182230;
+    font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  }
+  .shell { width: min(760px, calc(100% - 32px)); margin: 0 auto; padding: 64px 0 36px; }
+  header { margin-bottom: 30px; }
+  .eyebrow { margin: 0 0 9px; color: #59677a; font-size: 11px; font-weight: 750; letter-spacing: .14em; }
+  h1 { margin: 0; font-size: clamp(32px, 6vw, 48px); letter-spacing: -.045em; }
+  h2 { margin: 0; font-size: 20px; letter-spacing: -.025em; }
+  .intro { max-width: 570px; margin: 14px 0 0; color: #536174; line-height: 1.65; }
+  .panel { margin: 16px 0; padding: 24px; border: 1px solid #e0e5ec; border-radius: 16px; background: white; box-shadow: 0 8px 28px #18223008; }
+  .section-heading { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+  .badge { border-radius: 999px; padding: 7px 11px; font-size: 12px; font-weight: 700; }
+  .pending { background: #f0f2f5; color: #667085; }
+  .healthy { background: #e6f7ee; color: #167442; }
+  .failed { background: #fff0ed; color: #b13d2f; }
+  pre { overflow: auto; margin: 20px 0 0; padding: 14px; border-radius: 10px; background: #f6f8fa; color: #344256; font: 13px/1.6 ui-monospace, SFMono-Regular, Consolas, monospace; }
+  form { margin-top: 20px; }
+  label { display: block; margin-bottom: 7px; color: #485568; font-size: 13px; font-weight: 650; }
+  .form-row { display: flex; gap: 9px; }
+  input { min-width: 0; flex: 1; border: 1px solid #d7dee7; border-radius: 9px; padding: 11px 12px; color: #182230; font: inherit; }
+  input:focus { outline: 3px solid #d9e9ff; border-color: #4c8fe8; }
+  button { border: 0; border-radius: 9px; padding: 0 18px; background: #216bd6; color: white; font: inherit; font-weight: 700; cursor: pointer; }
+  button:hover { background: #155bbd; }
+  .form-message { min-height: 18px; margin: 8px 0 0; color: #59677a; font-size: 12px; }
+  .note-list { display: grid; gap: 9px; margin: 12px 0 0; padding: 0; list-style: none; }
+  .note-list li { display: flex; justify-content: space-between; gap: 16px; padding: 12px; border-radius: 9px; background: #f6f8fa; overflow-wrap: anywhere; }
+  .note-list time { flex: 0 0 auto; color: #748094; font-size: 11px; }
+  .empty { color: #748094; font-size: 13px; }
+  footer { padding: 8px 2px; color: #718096; font-size: 12px; }
+  @media (max-width: 520px) { .shell { padding-top: 40px; } .panel { padding: 19px; } .note-list li { flex-direction: column; gap: 4px; } }
+</style>
+
+<script>
+  type Note = { id: number; content: string; createdAt: number };
+
+  const statusBadge = document.querySelector<HTMLSpanElement>("#status-badge")!;
+  const healthResult = document.querySelector<HTMLPreElement>("#health-result")!;
+  const noteList = document.querySelector<HTMLUListElement>("#note-list")!;
+  const noteForm = document.querySelector<HTMLFormElement>("#note-form")!;
+  const noteInput = document.querySelector<HTMLInputElement>("#note-content")!;
+  const formMessage = document.querySelector<HTMLParagraphElement>("#form-message")!;
+
+  async function loadHealth() {
+    try {
+      const response = await fetch("/api/health");
+      const result = await response.json();
+      if (!response.ok) throw new Error("API 요청에 실패했습니다.");
+      statusBadge.textContent = "정상";
+      statusBadge.className = "badge healthy";
+      healthResult.textContent = JSON.stringify(result, null, 2);
+    } catch {
+      statusBadge.textContent = "연결 실패";
+      statusBadge.className = "badge failed";
+      healthResult.textContent = "API에 연결할 수 없습니다. 전체 Pages 로컬 실행 모드(npm run dev)를 사용 중인지 확인하세요.";
+    }
+  }
+
+  async function loadNotes() {
+    const response = await fetch("/api/notes");
+    if (!response.ok) throw new Error("메모를 불러오지 못했습니다.");
+    const items = (await response.json()) as Note[];
+    noteList.replaceChildren();
+    if (items.length === 0) {
+      const empty = document.createElement("li");
+      empty.className = "empty";
+      empty.textContent = "아직 저장된 메모가 없습니다.";
+      noteList.append(empty);
+      return;
+    }
+    for (const note of items) {
+      const item = document.createElement("li");
+      const content = document.createElement("span");
+      const createdAt = document.createElement("time");
+      content.textContent = note.content;
+      createdAt.dateTime = new Date(note.createdAt).toISOString();
+      createdAt.textContent = new Date(note.createdAt).toLocaleString("ko-KR");
+      item.append(content, createdAt);
+      noteList.append(item);
+    }
+  }
+
+  noteForm.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    formMessage.textContent = "저장 중…";
+    try {
+      const response = await fetch("/api/notes", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ content: noteInput.value }),
+      });
+      if (!response.ok) {
+        const result = (await response.json()) as { error?: string };
+        throw new Error(result.error ?? "저장하지 못했습니다.");
+      }
+      noteInput.value = "";
+      formMessage.textContent = "메모를 저장했습니다.";
+      await loadNotes();
+    } catch (error) {
+      formMessage.textContent = error instanceof Error ? error.message : "저장하지 못했습니다.";
+    }
+  });
+
+  void Promise.all([loadHealth(), loadNotes()]).catch(() => {
+    formMessage.textContent = "D1에 연결할 수 없습니다. 먼저 로컬 DB 마이그레이션을 실행하세요.";
+  });
+</script>
